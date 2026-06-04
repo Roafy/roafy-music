@@ -20,16 +20,18 @@ def mostrar_login(supabase):
     for k, v in [("paso_registro", 0), ("temp_user_id", None),
                  ("temp_generos", []), ("canciones_paso3", []),
                  ("temp_email", ""), ("temp_password", ""),
-                 ("artistas_seleccionados", [])]:  # 👈 Ahora es una lista
+                 ("artistas_seleccionados", [])]:
         if k not in st.session_state:
             st.session_state[k] = v
 
     if st.session_state.paso_registro == 0:
         col_l, col_c, col_r = st.columns([1, 2, 1])
         with col_c:
+            # 👇 CAMBIO AQUÍ: emoji 🎵 reemplazado por logo.png
+            st.image("logo.png", width=80, use_container_width=False)
             st.markdown("""
                 <div style='text-align:center;margin-bottom:30px'>
-                    <h1 style='color:#1DB954;font-size:3rem'>🎵 Roafy</h1>
+                    <h1 style='color:#1DB954;font-size:3rem'>Roafy</h1>
                     <p style='color:#aaa'>Tu musica, tu mundo</p>
                 </div>
             """, unsafe_allow_html=True)
