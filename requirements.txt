@@ -1,0 +1,6 @@
+streamlit
+supabase
+python-dotenv
+scikit-learn
+pandas
+numpy
