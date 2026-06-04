@@ -6,11 +6,15 @@ from dotenv import load_dotenv
 from supabase import create_client
 import login_5 as login
 import recomendaciones_3 as recomendaciones
+from PIL import Image
+
+# ── CARGAR LOGO PARA EL ICONO DE LA PÁGINA ─────────────────────────────────────
+logo = Image.open("logo.png")
 
 # ── CONFIG ─────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Roafy Music",
-    page_icon="🎵",
+    page_icon=logo,  # 👈 CAMBIADO: ahora usa logo.png en lugar de 🎵
     layout="wide",
     initial_sidebar_state="expanded"
 )
