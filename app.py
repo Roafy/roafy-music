@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import re
+import json
 from dotenv import load_dotenv
 from supabase import create_client
 import login_5 as login
@@ -94,29 +95,6 @@ def agregar_a_cola(cancion):
         st.session_state.cola_reproduccion.append(cancion)
         st.toast(f"🎵 Agregado: {cancion.get('titulo', '')}")
 
-def siguiente_cancion():
-    cola = st.session_state.cola_reproduccion
-    if not cola:
-        return
-    if st.session_state.modo_aleatorio:
-        import random
-        st.session_state.indice_actual = random.randint(0, len(cola) - 1)
-    else:
-        st.session_state.indice_actual = (st.session_state.indice_actual + 1) % len(cola)
-    nueva = cola[st.session_state.indice_actual]
-    st.session_state.cancion_actual = nueva
-    recomendaciones.guardar_interaccion(supabase, st.session_state.user.id, nueva["id"], es_favorito=False)
-    st.rerun()
-
-def anterior_cancion():
-    cola = st.session_state.cola_reproduccion
-    if not cola:
-        return
-    st.session_state.indice_actual = max(0, st.session_state.indice_actual - 1)
-    nueva = cola[st.session_state.indice_actual]
-    st.session_state.cancion_actual = nueva
-    st.rerun()
-
 def limpiar_cola():
     st.session_state.cola_reproduccion = []
     st.session_state.indice_actual = 0
@@ -124,7 +102,10 @@ def limpiar_cola():
     st.toast("🗑️ Cola limpiada")
     st.rerun()
 
-# ── REPRODUCTOR ── USA IFRAME, NO st.video() ─────────────────────────────────
+# ── REPRODUCTOR CORREGIDO ─────────────────────────────────────────────────────
+# La clave: toda la cola se pasa al iframe como JSON.
+# JavaScript maneja el avance automático con player.loadVideoById()
+# sin necesitar st.rerun() entre canciones.
 def mostrar_reproductor_avanzado():
     inicializar_cola()
 
@@ -132,9 +113,23 @@ def mostrar_reproductor_avanzado():
         st.info("🎵 Haz clic en ▶️ en una canción para empezar a reproducir")
         return
 
-    c = st.session_state.cancion_actual
-    url = c.get("url_youtube", "")
-    video_id = extraer_video_id(url)
+    c      = st.session_state.cancion_actual
+    cola   = st.session_state.cola_reproduccion
+    indice = st.session_state.indice_actual
+
+    # Construir playlist completa con todos los video_ids
+    playlist_data = []
+    for cancion in cola:
+        vid = extraer_video_id(cancion.get("url_youtube", ""))
+        playlist_data.append({
+            "videoId": vid or "",
+            "titulo":  cancion.get("titulo", ""),
+            "artista": cancion.get("artista", ""),
+            "genero":  cancion.get("genero", ""),
+        })
+
+    playlist_json = json.dumps(playlist_data, ensure_ascii=False)
+    modo_aleatorio = str(st.session_state.modo_aleatorio).lower()
 
     st.markdown("---")
     st.markdown("## 🎬 Reproductor")
@@ -142,34 +137,94 @@ def mostrar_reproductor_avanzado():
     col_video, col_info = st.columns([2, 1])
 
     with col_video:
-        if video_id:
-            iframe_html = f"""
-            <html><body style="margin:0;padding:0;background:#121212;">
-            <div id="player" style="border-radius:12px;overflow:hidden;"></div>
-            <div id="aviso" style="display:none;margin-top:10px;background:#1DB954;color:#000;font-weight:bold;
-                padding:12px 20px;border-radius:500px;text-align:center;font-family:sans-serif;">
-                ⏭️ Video terminado — presiona SIGUIENTE ↗
-            </div>
-            <script>
-                var tag=document.createElement('script');
-                tag.src="https://www.youtube.com/iframe_api";
-                document.head.appendChild(tag);
-                var player;
-                function onYouTubeIframeAPIReady(){{
-                    player=new YT.Player('player',{{
-                        height:'315',width:'100%',videoId:'{video_id}',
-                        playerVars:{{rel:0,modestbranding:1,autoplay:0}},
-                        events:{{onStateChange:function(e){{
-                            if(e.data===0) document.getElementById('aviso').style.display='block';
-                        }}}}
-                    }});
+        iframe_html = f"""
+        <html><body style="margin:0;padding:0;background:#121212;font-family:sans-serif;">
+
+        <div id="player" style="border-radius:12px;overflow:hidden;"></div>
+
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button onclick="anteriorCancion()"
+                style="background:#1DB954;color:#000;border:none;padding:8px 20px;
+                       border-radius:500px;font-weight:700;cursor:pointer;font-size:16px;">⏮️</button>
+            <button onclick="siguienteCancion()"
+                style="background:#1DB954;color:#000;border:none;padding:8px 20px;
+                       border-radius:500px;font-weight:700;cursor:pointer;font-size:16px;">⏭️</button>
+            <span id="badge_idx"
+                style="color:#1DB954;font-weight:700;font-size:14px;margin-left:8px;">
+                {indice + 1} / {len(cola)}
+            </span>
+        </div>
+
+        <div id="info_cancion" style="margin-top:10px;color:#b3b3b3;font-size:13px;">
+            <span id="titulo_actual" style="color:#FFFFFF;font-weight:700;">
+                {c.get('titulo', '')}
+            </span>
+            —
+            <span id="artista_actual">{c.get('artista', '')} · {c.get('genero', '')}</span>
+        </div>
+
+        <script>
+            var playlist     = {playlist_json};
+            var currentIndex = {indice};
+            var modoAleatorio = {modo_aleatorio};
+            var player;
+
+            var tag = document.createElement('script');
+            tag.src = "https://www.youtube.com/iframe_api";
+            document.head.appendChild(tag);
+
+            function onYouTubeIframeAPIReady() {{
+                var firstId = (playlist[currentIndex] || {{}}).videoId || "";
+                if (!firstId) return;
+                player = new YT.Player('player', {{
+                    height: '315',
+                    width:  '100%',
+                    videoId: firstId,
+                    playerVars: {{ rel: 0, modestbranding: 1, autoplay: 1 }},
+                    events: {{ onStateChange: onStateChange }}
+                }});
+            }}
+
+            function onStateChange(e) {{
+                // Estado 0 = video terminado → avanzar automáticamente
+                if (e.data === 0) {{
+                    siguienteCancion();
                 }}
-            </script>
-            </body></html>
-            """
-            st.components.v1.html(iframe_html, height=390)
-        else:
-            st.error(f"❌ No se pudo leer la URL: `{url}`")
+            }}
+
+            function siguienteCancion() {{
+                if (playlist.length === 0) return;
+                if (modoAleatorio) {{
+                    currentIndex = Math.floor(Math.random() * playlist.length);
+                }} else {{
+                    currentIndex = (currentIndex + 1) % playlist.length;
+                }}
+                cargarCancion(currentIndex);
+            }}
+
+            function anteriorCancion() {{
+                if (playlist.length === 0) return;
+                currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
+                cargarCancion(currentIndex);
+            }}
+
+            function cargarCancion(idx) {{
+                var item = playlist[idx];
+                if (!item || !item.videoId) return;
+                player.loadVideoById(item.videoId);
+                // Actualizar info visual dentro del iframe
+                var t = document.getElementById('titulo_actual');
+                var a = document.getElementById('artista_actual');
+                var b = document.getElementById('badge_idx');
+                if (t) t.innerText = item.titulo;
+                if (a) a.innerText = item.artista + ' · ' + item.genero;
+                if (b) b.innerText = (idx + 1) + ' / ' + playlist.length;
+                currentIndex = idx;
+            }}
+        </script>
+        </body></html>
+        """
+        st.components.v1.html(iframe_html, height=440)
 
     with col_info:
         st.markdown(f"""
@@ -181,44 +236,47 @@ def mostrar_reproductor_avanzado():
         </div>
         """, unsafe_allow_html=True)
 
-        b1, b2, b3, b4 = st.columns(4)
+        b1, b2, b3 = st.columns(3)
         with b1:
-            if st.button("⏮️", use_container_width=True, key="btn_ant"):
-                anterior_cancion()
-        with b2:
-            if st.button("⏭️", use_container_width=True, key="btn_sig"):
-                siguiente_cancion()
-        with b3:
             icono_ale = "🔀✅" if st.session_state.modo_aleatorio else "🔀"
             if st.button(icono_ale, use_container_width=True, key="btn_ale"):
                 st.session_state.modo_aleatorio = not st.session_state.modo_aleatorio
                 st.rerun()
-        with b4:
-            if st.button("🗑️", use_container_width=True, key="btn_lim"):
+        with b2:
+            if st.button("🗑️ Cola", use_container_width=True, key="btn_lim"):
                 limpiar_cola()
+        with b3:
+            total  = len(cola)
+            actual = indice + 1 if total > 0 else 0
+            st.markdown(
+                f"<p style='text-align:center;color:#1DB954;margin-top:8px'>📋 {actual}/{total}</p>",
+                unsafe_allow_html=True
+            )
 
-        total  = len(st.session_state.cola_reproduccion)
-        actual = st.session_state.indice_actual + 1 if total > 0 else 0
-        st.markdown(f"<p style='text-align:center;color:#1DB954;margin-top:6px'>📋 {actual} / {total}</p>", unsafe_allow_html=True)
-
-    # Cola de reproducción
-    if st.session_state.cola_reproduccion:
+    # Cola de reproducción visual
+    if cola:
         st.markdown("---")
         st.markdown("### 📋 Cola de reproducción")
-        for i, cancion in enumerate(st.session_state.cola_reproduccion):
+        for i, cancion in enumerate(cola):
             c1, c2, c3 = st.columns([0.5, 8, 1])
             with c1:
-                if i == st.session_state.indice_actual:
+                if i == indice:
                     st.markdown("<p style='color:#1DB954;font-weight:bold'>▶</p>", unsafe_allow_html=True)
                 else:
                     st.markdown(f"<p style='color:#888'>{i+1}</p>", unsafe_allow_html=True)
             with c2:
-                color = "#1DB954" if i == st.session_state.indice_actual else "#FFFFFF"
-                st.markdown(f"<span style='color:{color}'><b>{cancion.get('titulo')}</b> — {cancion.get('artista')}</span>", unsafe_allow_html=True)
+                color = "#1DB954" if i == indice else "#FFFFFF"
+                st.markdown(
+                    f"<span style='color:{color}'><b>{cancion.get('titulo')}</b> — {cancion.get('artista')}</span>",
+                    unsafe_allow_html=True
+                )
             with c3:
                 if st.button("▶", key=f"cola_{i}"):
-                    st.session_state.indice_actual = i
-                    st.session_state.cancion_actual = cancion
+                    st.session_state.indice_actual   = i
+                    st.session_state.cancion_actual  = cancion
+                    recomendaciones.guardar_interaccion(
+                        supabase, st.session_state.user.id, cancion["id"], es_favorito=False
+                    )
                     st.rerun()
 
 # ── ESTADOS ─────────────────────────────────────────────────────────────────
@@ -278,10 +336,10 @@ def mostrar_sidebar():
             st.markdown("### **Roafy**")
 
         st.markdown("---")
-        if st.button("🏠 Inicio",       use_container_width=True): st.session_state.pagina = "inicio";    st.rerun()
-        if st.button("🔍 Buscar",       use_container_width=True): st.session_state.pagina = "buscar";    st.rerun()
-        if st.button("❤️ Mis Favoritos",use_container_width=True): st.session_state.pagina = "favoritos"; st.rerun()
-        if st.button("📊 Mi Perfil",    use_container_width=True): st.session_state.pagina = "perfil";    st.rerun()
+        if st.button("🏠 Inicio",        use_container_width=True): st.session_state.pagina = "inicio";    st.rerun()
+        if st.button("🔍 Buscar",        use_container_width=True): st.session_state.pagina = "buscar";    st.rerun()
+        if st.button("❤️ Mis Favoritos", use_container_width=True): st.session_state.pagina = "favoritos"; st.rerun()
+        if st.button("📊 Mi Perfil",     use_container_width=True): st.session_state.pagina = "perfil";    st.rerun()
 
         st.markdown("---")
         st.markdown("### 🎧 Variedad Musical")
@@ -296,11 +354,11 @@ def mostrar_sidebar():
         st.markdown(f"<p style='color:#b3b3b3;font-size:0.8rem'>👤 {nombre}</p>", unsafe_allow_html=True)
 
         if st.button("🚪 Cerrar sesión", use_container_width=True):
-            for k in ["logueado","user","cancion_actual","cola_reproduccion","favoritos_ids"]:
-                if k == "logueado":          st.session_state[k] = False
+            for k in ["logueado", "user", "cancion_actual", "cola_reproduccion", "favoritos_ids"]:
+                if k == "logueado":            st.session_state[k] = False
                 elif k == "cola_reproduccion": st.session_state[k] = []
-                elif k == "favoritos_ids":   st.session_state[k] = set()
-                else:                        st.session_state[k] = None
+                elif k == "favoritos_ids":     st.session_state[k] = set()
+                else:                          st.session_state[k] = None
             st.rerun()
 
 # ── PÁGINAS ───────────────────────────────────────────────────────────────────
@@ -324,9 +382,9 @@ def pagina_buscar():
 
     col1, col2 = st.columns(2)
     with col1:
-        genero_filtro = st.selectbox("🎸 Género", ["Todos","Electrónica","Pop","Regional","Rock","Tropical","Urbano"])
+        genero_filtro = st.selectbox("🎸 Género", ["Todos", "Electrónica", "Pop", "Regional", "Rock", "Tropical", "Urbano"])
     with col2:
-        orden = st.selectbox("📊 Ordenar por", ["Título","Artista"])
+        orden = st.selectbox("📊 Ordenar por", ["Título", "Artista"])
 
     query = st.text_input("🔎", placeholder="Busca por título, artista o género...")
 
@@ -334,15 +392,15 @@ def pagina_buscar():
 
     if query:
         q = query.lower()
-        todos = [c for c in todos if q in c.get("titulo","").lower()
-                 or q in c.get("artista","").lower()
-                 or q in c.get("genero","").lower()]
+        todos = [c for c in todos if q in c.get("titulo", "").lower()
+                 or q in c.get("artista", "").lower()
+                 or q in c.get("genero", "").lower()]
     if genero_filtro != "Todos":
         todos = [c for c in todos if c.get("genero") == genero_filtro]
     if orden == "Título":
-        todos = sorted(todos, key=lambda x: x.get("titulo",""))
+        todos = sorted(todos, key=lambda x: x.get("titulo", ""))
     elif orden == "Artista":
-        todos = sorted(todos, key=lambda x: x.get("artista",""))
+        todos = sorted(todos, key=lambda x: x.get("artista", ""))
 
     st.markdown(f"<p style='color:#b3b3b3'>📀 {len(todos)} canciones</p>", unsafe_allow_html=True)
     mostrar_reproductor_avanzado()
@@ -375,7 +433,7 @@ def pagina_favoritos():
 def pagina_perfil():
     st.markdown("## 📊 Mi Perfil Musical")
     u      = st.session_state.user
-    nombre = u.user_metadata.get("nombre","Usuario") if u and u.user_metadata else "Usuario"
+    nombre = u.user_metadata.get("nombre", "Usuario") if u and u.user_metadata else "Usuario"
 
     col1, col2 = st.columns(2)
     with col1:
