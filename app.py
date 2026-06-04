@@ -84,6 +84,7 @@ def inicializar_cola():
         "cola_reproduccion": [],
         "indice_actual": 0,
         "modo_aleatorio": False,
+        "cola_inicializada": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -95,17 +96,26 @@ def agregar_a_cola(cancion):
         st.session_state.cola_reproduccion.append(cancion)
         st.toast(f"🎵 Agregado: {cancion.get('titulo', '')}")
 
+def cargar_cola_completa(canciones):
+    """Carga toda una lista de canciones a la cola sin duplicar."""
+    ids_existentes = {c["id"] for c in st.session_state.cola_reproduccion}
+    agregadas = 0
+    for c in canciones:
+        if c["id"] not in ids_existentes:
+            st.session_state.cola_reproduccion.append(c)
+            ids_existentes.add(c["id"])
+            agregadas += 1
+    return agregadas
+
 def limpiar_cola():
-    st.session_state.cola_reproduccion = []
-    st.session_state.indice_actual = 0
-    st.session_state.cancion_actual = None
+    st.session_state.cola_reproduccion  = []
+    st.session_state.indice_actual       = 0
+    st.session_state.cancion_actual      = None
+    st.session_state.cola_inicializada   = False
     st.toast("🗑️ Cola limpiada")
     st.rerun()
 
 # ── REPRODUCTOR CORREGIDO ─────────────────────────────────────────────────────
-# La clave: toda la cola se pasa al iframe como JSON.
-# JavaScript maneja el avance automático con player.loadVideoById()
-# sin necesitar st.rerun() entre canciones.
 def mostrar_reproductor_avanzado():
     inicializar_cola()
 
@@ -117,18 +127,27 @@ def mostrar_reproductor_avanzado():
     cola   = st.session_state.cola_reproduccion
     indice = st.session_state.indice_actual
 
-    # Construir playlist completa con todos los video_ids
+    # Construir playlist completa — solo canciones con video_id válido
     playlist_data = []
     for cancion in cola:
         vid = extraer_video_id(cancion.get("url_youtube", ""))
-        playlist_data.append({
-            "videoId": vid or "",
-            "titulo":  cancion.get("titulo", ""),
-            "artista": cancion.get("artista", ""),
-            "genero":  cancion.get("genero", ""),
-        })
+        if vid:  # solo incluir si el link es válido
+            playlist_data.append({
+                "videoId": vid,
+                "titulo":  cancion.get("titulo", ""),
+                "artista": cancion.get("artista", ""),
+                "genero":  cancion.get("genero", ""),
+            })
 
-    playlist_json = json.dumps(playlist_data, ensure_ascii=False)
+    # Encontrar el índice correcto dentro de playlist_data
+    video_id_actual = extraer_video_id(c.get("url_youtube", ""))
+    indice_js = 0
+    for i, item in enumerate(playlist_data):
+        if item["videoId"] == video_id_actual:
+            indice_js = i
+            break
+
+    playlist_json  = json.dumps(playlist_data, ensure_ascii=False)
     modo_aleatorio = str(st.session_state.modo_aleatorio).lower()
 
     st.markdown("---")
@@ -145,51 +164,67 @@ def mostrar_reproductor_avanzado():
         <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <button onclick="anteriorCancion()"
                 style="background:#1DB954;color:#000;border:none;padding:8px 20px;
-                       border-radius:500px;font-weight:700;cursor:pointer;font-size:16px;">⏮️</button>
+                       border-radius:500px;font-weight:700;cursor:pointer;font-size:16px;">⏮️ Anterior</button>
             <button onclick="siguienteCancion()"
                 style="background:#1DB954;color:#000;border:none;padding:8px 20px;
-                       border-radius:500px;font-weight:700;cursor:pointer;font-size:16px;">⏭️</button>
+                       border-radius:500px;font-weight:700;cursor:pointer;font-size:16px;">⏭️ Siguiente</button>
             <span id="badge_idx"
                 style="color:#1DB954;font-weight:700;font-size:14px;margin-left:8px;">
-                {indice + 1} / {len(cola)}
+                {indice_js + 1} / {len(playlist_data)}
             </span>
         </div>
 
-        <div id="info_cancion" style="margin-top:10px;color:#b3b3b3;font-size:13px;">
-            <span id="titulo_actual" style="color:#FFFFFF;font-weight:700;">
+        <div style="margin-top:8px;padding:10px;background:#1e1e1e;border-radius:8px;">
+            <div id="titulo_actual" style="color:#FFFFFF;font-weight:700;font-size:15px;">
                 {c.get('titulo', '')}
-            </span>
-            —
-            <span id="artista_actual">{c.get('artista', '')} · {c.get('genero', '')}</span>
+            </div>
+            <div id="artista_actual" style="color:#b3b3b3;font-size:13px;margin-top:4px;">
+                {c.get('artista', '')} · {c.get('genero', '')}
+            </div>
         </div>
 
         <script>
             var playlist     = {playlist_json};
-            var currentIndex = {indice};
+            var currentIndex = {indice_js};
             var modoAleatorio = {modo_aleatorio};
             var player;
+            var playerReady  = false;
 
             var tag = document.createElement('script');
             tag.src = "https://www.youtube.com/iframe_api";
             document.head.appendChild(tag);
 
             function onYouTubeIframeAPIReady() {{
-                var firstId = (playlist[currentIndex] || {{}}).videoId || "";
-                if (!firstId) return;
+                if (!playlist.length) return;
+                var firstId = playlist[currentIndex].videoId;
                 player = new YT.Player('player', {{
                     height: '315',
                     width:  '100%',
                     videoId: firstId,
-                    playerVars: {{ rel: 0, modestbranding: 1, autoplay: 1 }},
-                    events: {{ onStateChange: onStateChange }}
+                    playerVars: {{
+                        rel:            0,
+                        modestbranding: 1,
+                        autoplay:       1,
+                    }},
+                    events: {{
+                        onReady:       function(e) {{ playerReady = true; }},
+                        onStateChange: onStateChange,
+                        onError:       onError,
+                    }}
                 }});
             }}
 
             function onStateChange(e) {{
-                // Estado 0 = video terminado → avanzar automáticamente
+                // 0 = terminado → avanzar automáticamente
                 if (e.data === 0) {{
                     siguienteCancion();
                 }}
+            }}
+
+            // Si hay error en el video (eliminado, bloqueado, etc.) saltar al siguiente
+            function onError(e) {{
+                console.warn('Error en video, saltando. Código:', e.data);
+                setTimeout(function() {{ siguienteCancion(); }}, 1500);
             }}
 
             function siguienteCancion() {{
@@ -209,22 +244,29 @@ def mostrar_reproductor_avanzado():
             }}
 
             function cargarCancion(idx) {{
+                if (!playerReady) return;
                 var item = playlist[idx];
-                if (!item || !item.videoId) return;
+                if (!item || !item.videoId) {{
+                    siguienteCancion();
+                    return;
+                }}
+                currentIndex = idx;
                 player.loadVideoById(item.videoId);
-                // Actualizar info visual dentro del iframe
+                actualizarInfo(item, idx);
+            }}
+
+            function actualizarInfo(item, idx) {{
                 var t = document.getElementById('titulo_actual');
                 var a = document.getElementById('artista_actual');
                 var b = document.getElementById('badge_idx');
                 if (t) t.innerText = item.titulo;
                 if (a) a.innerText = item.artista + ' · ' + item.genero;
                 if (b) b.innerText = (idx + 1) + ' / ' + playlist.length;
-                currentIndex = idx;
             }}
         </script>
         </body></html>
         """
-        st.components.v1.html(iframe_html, height=440)
+        st.components.v1.html(iframe_html, height=460)
 
     with col_info:
         st.markdown(f"""
@@ -233,56 +275,65 @@ def mostrar_reproductor_avanzado():
             <h3 style='color:#FFFFFF;margin:8px 0 4px'>{c.get('titulo', '')}</h3>
             <p style='color:#b3b3b3;margin:0'>{c.get('artista', '')}</p>
             <p style='color:#888;font-size:0.85rem;margin:4px 0'>🎸 {c.get('genero', '')}</p>
+            <p style='color:#555;font-size:0.75rem;margin:8px 0 0'>
+                📋 {len(playlist_data)} canciones en cola con video válido
+            </p>
         </div>
         """, unsafe_allow_html=True)
 
-        b1, b2, b3 = st.columns(3)
+        b1, b2 = st.columns(2)
         with b1:
             icono_ale = "🔀✅" if st.session_state.modo_aleatorio else "🔀"
             if st.button(icono_ale, use_container_width=True, key="btn_ale"):
                 st.session_state.modo_aleatorio = not st.session_state.modo_aleatorio
                 st.rerun()
         with b2:
-            if st.button("🗑️ Cola", use_container_width=True, key="btn_lim"):
+            if st.button("🗑️ Limpiar", use_container_width=True, key="btn_lim"):
                 limpiar_cola()
-        with b3:
-            total  = len(cola)
-            actual = indice + 1 if total > 0 else 0
-            st.markdown(
-                f"<p style='text-align:center;color:#1DB954;margin-top:8px'>📋 {actual}/{total}</p>",
-                unsafe_allow_html=True
-            )
 
-    # Cola de reproducción visual
+        total  = len(cola)
+        actual = indice + 1 if total > 0 else 0
+        st.markdown(
+            f"<p style='text-align:center;color:#1DB954;margin-top:8px'>📋 {actual}/{total} en cola</p>",
+            unsafe_allow_html=True
+        )
+
+        # Mostrar advertencia si hay canciones sin link válido
+        sin_link = total - len(playlist_data)
+        if sin_link > 0:
+            st.warning(f"⚠️ {sin_link} canciones sin link de YouTube válido fueron omitidas.")
+
+    # Cola de reproducción visual (compacta)
     if cola:
-        st.markdown("---")
-        st.markdown("### 📋 Cola de reproducción")
-        for i, cancion in enumerate(cola):
-            c1, c2, c3 = st.columns([0.5, 8, 1])
-            with c1:
-                if i == indice:
-                    st.markdown("<p style='color:#1DB954;font-weight:bold'>▶</p>", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"<p style='color:#888'>{i+1}</p>", unsafe_allow_html=True)
-            with c2:
-                color = "#1DB954" if i == indice else "#FFFFFF"
-                st.markdown(
-                    f"<span style='color:{color}'><b>{cancion.get('titulo')}</b> — {cancion.get('artista')}</span>",
-                    unsafe_allow_html=True
-                )
-            with c3:
-                if st.button("▶", key=f"cola_{i}"):
-                    st.session_state.indice_actual   = i
-                    st.session_state.cancion_actual  = cancion
-                    recomendaciones.guardar_interaccion(
-                        supabase, st.session_state.user.id, cancion["id"], es_favorito=False
+        with st.expander(f"📋 Ver cola completa ({len(cola)} canciones)", expanded=False):
+            for i, cancion in enumerate(cola):
+                vid_ok = bool(extraer_video_id(cancion.get("url_youtube", "")))
+                c1, c2, c3 = st.columns([0.5, 8, 1])
+                with c1:
+                    if i == indice:
+                        st.markdown("<p style='color:#1DB954;font-weight:bold;margin:0'>▶</p>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"<p style='color:#888;margin:0'>{i+1}</p>", unsafe_allow_html=True)
+                with c2:
+                    color  = "#1DB954" if i == indice else "#FFFFFF"
+                    estado = "" if vid_ok else " ⚠️"
+                    st.markdown(
+                        f"<span style='color:{color}'><b>{cancion.get('titulo')}</b>{estado} — {cancion.get('artista')}</span>",
+                        unsafe_allow_html=True
                     )
-                    st.rerun()
+                with c3:
+                    if st.button("▶", key=f"cola_{i}"):
+                        st.session_state.indice_actual  = i
+                        st.session_state.cancion_actual = cancion
+                        recomendaciones.guardar_interaccion(
+                            supabase, st.session_state.user.id, cancion["id"], es_favorito=False
+                        )
+                        st.rerun()
 
 # ── ESTADOS ─────────────────────────────────────────────────────────────────
 for k, v in [("logueado", False), ("user", None),
              ("cancion_actual", None), ("favoritos_ids", set()),
-             ("pagina", "inicio")]:
+             ("pagina", "inicio"), ("cola_inicializada", False)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -290,12 +341,14 @@ for k, v in [("logueado", False), ("user", None),
 def tarjeta_cancion(cancion, idx, mostrar_fav=True):
     cid    = cancion.get("id")
     es_fav = cid in st.session_state.favoritos_ids
+    vid_ok = bool(extraer_video_id(cancion.get("url_youtube", "")))
 
     col_info, col_play, col_queue, col_fav = st.columns([5, 1, 1, 1])
     with col_info:
+        estado = "" if vid_ok else " ⚠️"
         st.markdown(f"""
         <div class='song-card'>
-            <div class='song-title'>🎵 {cancion.get('titulo', '')}</div>
+            <div class='song-title'>🎵 {cancion.get('titulo', '')}{estado}</div>
             <div class='song-meta'>{cancion.get('artista', '')} · {cancion.get('genero', '')}</div>
         </div>
         """, unsafe_allow_html=True)
@@ -354,25 +407,64 @@ def mostrar_sidebar():
         st.markdown(f"<p style='color:#b3b3b3;font-size:0.8rem'>👤 {nombre}</p>", unsafe_allow_html=True)
 
         if st.button("🚪 Cerrar sesión", use_container_width=True):
-            for k in ["logueado", "user", "cancion_actual", "cola_reproduccion", "favoritos_ids"]:
+            for k in ["logueado", "user", "cancion_actual", "cola_reproduccion",
+                      "favoritos_ids", "cola_inicializada"]:
                 if k == "logueado":            st.session_state[k] = False
                 elif k == "cola_reproduccion": st.session_state[k] = []
                 elif k == "favoritos_ids":     st.session_state[k] = set()
+                elif k == "cola_inicializada": st.session_state[k] = False
                 else:                          st.session_state[k] = None
             st.rerun()
 
 # ── PÁGINAS ───────────────────────────────────────────────────────────────────
 def pagina_inicio():
     st.markdown("## 🏠 Para ti")
-    mostrar_reproductor_avanzado()
 
     with st.spinner("🎵 Calculando recomendaciones..."):
         canciones = recomendaciones.obtener_musica_recomendada(supabase, st.session_state.user.id)
 
     if not canciones:
-        canciones = supabase.table("canciones").select("*").limit(20).execute().data or []
+        # Fallback: traer TODAS las canciones de la BD
+        canciones = supabase.table("canciones").select("*").execute().data or []
+
+    # ── AUTO-CARGAR toda la lista a la cola al entrar por primera vez ──
+    # Así el reproductor tiene todas las canciones disponibles
+    if not st.session_state.cola_inicializada and canciones:
+        cargar_cola_completa(canciones)
+        st.session_state.cola_inicializada = True
+        if not st.session_state.cancion_actual and st.session_state.cola_reproduccion:
+            st.session_state.cancion_actual = st.session_state.cola_reproduccion[0]
+            st.session_state.indice_actual  = 0
+
+    mostrar_reproductor_avanzado()
 
     st.markdown(f"<p style='color:#b3b3b3'>🎯 {len(canciones)} canciones para ti</p>", unsafe_allow_html=True)
+
+    col_acc1, col_acc2 = st.columns(2)
+    with col_acc1:
+        if st.button("▶️ Reproducir todo desde el inicio", use_container_width=True):
+            if canciones:
+                st.session_state.cola_reproduccion = []
+                st.session_state.cola_inicializada = False
+                cargar_cola_completa(canciones)
+                st.session_state.cola_inicializada = True
+                st.session_state.cancion_actual    = canciones[0]
+                st.session_state.indice_actual     = 0
+                st.rerun()
+    with col_acc2:
+        if st.button("🔀 Reproducir en aleatorio", use_container_width=True):
+            if canciones:
+                import random
+                mezcladas = canciones.copy()
+                random.shuffle(mezcladas)
+                st.session_state.cola_reproduccion = []
+                st.session_state.cola_inicializada = False
+                cargar_cola_completa(mezcladas)
+                st.session_state.cola_inicializada = True
+                st.session_state.cancion_actual    = mezcladas[0]
+                st.session_state.indice_actual     = 0
+                st.rerun()
+
     for i, c in enumerate(canciones):
         tarjeta_cancion(c, i)
 
@@ -403,7 +495,15 @@ def pagina_buscar():
         todos = sorted(todos, key=lambda x: x.get("artista", ""))
 
     st.markdown(f"<p style='color:#b3b3b3'>📀 {len(todos)} canciones</p>", unsafe_allow_html=True)
+
+    # Botón para agregar todos los resultados a la cola
+    if todos and st.button(f"📋 Agregar los {len(todos)} resultados a la cola", use_container_width=True):
+        agregadas = cargar_cola_completa(todos)
+        st.toast(f"✅ {agregadas} canciones nuevas agregadas a la cola")
+        st.rerun()
+
     mostrar_reproductor_avanzado()
+
     for i, c in enumerate(todos):
         tarjeta_cancion(c, f"bus_{i}")
 
@@ -426,6 +526,16 @@ def pagina_favoritos():
 
     canciones = supabase.table("canciones").select("*").in_("id", ids_fav).execute().data or []
     st.markdown(f"<p style='color:#b3b3b3'>🎵 {len(canciones)} canciones favoritas</p>", unsafe_allow_html=True)
+
+    if canciones and st.button("▶️ Reproducir solo favoritos", use_container_width=True):
+        st.session_state.cola_reproduccion = []
+        st.session_state.cola_inicializada = False
+        cargar_cola_completa(canciones)
+        st.session_state.cola_inicializada = True
+        st.session_state.cancion_actual    = canciones[0]
+        st.session_state.indice_actual     = 0
+        st.rerun()
+
     for i, c in enumerate(canciones):
         tarjeta_cancion(c, f"fav_{i}", mostrar_fav=False)
 
