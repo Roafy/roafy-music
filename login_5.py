@@ -20,16 +20,29 @@ def mostrar_login(supabase):
     for k, v in [("paso_registro", 0), ("temp_user_id", None),
                  ("temp_generos", []), ("canciones_paso3", []),
                  ("temp_email", ""), ("temp_password", ""),
-                 ("artistas_seleccionados", [])]:  # 👈 Ahora es una lista
+                 ("artistas_seleccionados", [])]:
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # Mostrar foto de perfil/logo del sistema en la barra lateral
+    with st.sidebar:
+        st.markdown("""
+            <div style='text-align:center; margin-bottom:20px;'>
+                <div style='font-size:4rem; background:#1DB95420; border-radius:50%; width:80px; height:80px; display:flex; align-items:center; justify-content:center; margin:0 auto;'>
+                    🎵
+                </div>
+                <h3 style='color:#1DB954; margin-top:10px;'>Roafy</h3>
+                <p style='color:#aaa; font-size:0.8rem'>Tu música, tu mundo</p>
+            </div>
+        """, unsafe_allow_html=True)
 
     if st.session_state.paso_registro == 0:
         col_l, col_c, col_r = st.columns([1, 2, 1])
         with col_c:
             st.markdown("""
                 <div style='text-align:center;margin-bottom:30px'>
-                    <h1 style='color:#1DB954;font-size:3rem'>🎵 Roafy</h1>
+                    <div style='font-size:5rem;'>🎵</div>
+                    <h1 style='color:#1DB954;font-size:3rem'>Roafy</h1>
                     <p style='color:#aaa'>Tu musica, tu mundo</p>
                 </div>
             """, unsafe_allow_html=True)
